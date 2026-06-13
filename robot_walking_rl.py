@@ -183,8 +183,8 @@ class BipedalWalker2D:
         self.phase = (self.phase + 1) % self.gait_period
         self.step_n += 1
 
-        # ── curriculum: forward weight grows from 0 → 5 over training ──────
-        fwd_weight = np.clip(self.step_n / 200.0, 0.0, 5.0)
+        # ── curriculum: forward weight grows from 0.5 → 5 over one episode ──
+        fwd_weight = np.clip(self.step_n / 100.0, 0.5, 5.0)
 
         # ── reward ───────────────────────────────────────────────────────────
         dx = self.cx - self.prev_cx
@@ -307,15 +307,23 @@ class PPO:
     def rollout(self, env, steps=2048):
         O,A,L,R,V,D = [],[],[],[],[],[]
         obs = env.reset()
+        ep_max_x = 0.0
+        self.last_ep_max_x = 0.0
         for _ in range(steps):
             o = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
             with torch.no_grad():
                 a, lp, v = self.net.act(o)
-            nobs, r, done, _ = env.step(a.squeeze(0).numpy())
+            nobs, r, done, info = env.step(a.squeeze(0).numpy())
             O.append(obs); A.append(a.squeeze(0).numpy())
             L.append(lp.item()); R.append(r)
             V.append(v.item()); D.append(done)
-            obs = env.reset() if done else nobs
+            ep_max_x = max(ep_max_x, info["x_pos"])
+            if done:
+                self.last_ep_max_x = ep_max_x
+                ep_max_x = 0.0
+                obs = env.reset()
+            else:
+                obs = nobs
         return [np.array(x, dtype=np.float32) for x in [O,A,L,R,V,D]]
 
     def gae(self, R, V, D):
@@ -360,7 +368,7 @@ class PPO:
             O,A,L,R,V,D = self.rollout(env, rollout)
             adv, ret     = self.gae(R,V,D)
             pl, vl       = self.update(O,A,L,adv,ret)
-            ep_ret = R.sum(); x = env.cx
+            ep_ret = R.sum(); x = self.last_ep_max_x
             returns.append(ep_ret); distances.append(x)
             steps += rollout
             print(f"{steps:>10}  {ep_ret:>10.1f}  {x:>8.2f}  {pl:>10.4f}  {vl:>8.4f}")
