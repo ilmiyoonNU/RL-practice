@@ -9,6 +9,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Normal
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.animation import FuncAnimation
 
 
 # ─── Environment ────────────────────────────────────────────────────────────
@@ -87,6 +89,43 @@ class BipedalWalker2D:
             reward -= 100.0
 
         return self._obs(), reward, done, {"x_pos": self.x_pos}
+
+    def get_body_parts(self):
+        """Return (x, y) positions of body parts for rendering."""
+        # torso center at (x_pos, 1.0), tilted by torso_angle
+        tx, ty = self.x_pos, 1.0
+        torso_len = 0.5
+        tx2 = tx + torso_len * np.sin(self.torso_angle)
+        ty2 = ty + torso_len * np.cos(self.torso_angle)
+
+        # hip joints at bottom of torso
+        h1x = tx - 0.2 * np.cos(self.torso_angle)
+        h1y = ty - 0.2 * np.sin(self.torso_angle) - 0.3
+        h2x = tx + 0.2 * np.cos(self.torso_angle)
+        h2y = ty + 0.2 * np.sin(self.torso_angle) - 0.3
+
+        thigh_len, shin_len = 0.4, 0.35
+
+        # leg 1
+        k1x = h1x + thigh_len * np.sin(self.joint_angles[0])
+        k1y = h1y - thigh_len * np.cos(self.joint_angles[0])
+        f1x = k1x + shin_len * np.sin(self.joint_angles[0] + self.joint_angles[1])
+        f1y = k1y - shin_len * np.cos(self.joint_angles[0] + self.joint_angles[1])
+
+        # leg 2
+        k2x = h2x + thigh_len * np.sin(self.joint_angles[2])
+        k2y = h2y - thigh_len * np.cos(self.joint_angles[2])
+        f2x = k2x + shin_len * np.sin(self.joint_angles[2] + self.joint_angles[3])
+        f2y = k2y - shin_len * np.cos(self.joint_angles[2] + self.joint_angles[3])
+
+        return {
+            "torso": ([tx, tx2], [ty, ty2]),
+            "head": (tx2, ty2 + 0.15),
+            "leg1": ([h1x, k1x, f1x], [h1y, k1y, f1y]),
+            "leg2": ([h2x, k2x, f2x], [h2y, k2y, f2y]),
+            "foot1_contact": self.foot_contact[0],
+            "foot2_contact": self.foot_contact[1],
+        }
 
 
 # ─── PPO Actor-Critic ────────────────────────────────────────────────────────
@@ -204,6 +243,54 @@ class PPO:
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
+def watch_robot(env, net, episodes=3):
+    """Render the robot walking live using matplotlib."""
+    plt.ion()
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.set_ylim(-0.2, 2.5)
+    ax.set_title("Robot Walking — Live View")
+    ax.set_xlabel("Position (m)")
+    ax.axhline(0, color="brown", linewidth=3, label="Ground")
+
+    for ep in range(episodes):
+        obs = env.reset()
+        done = False
+        total_reward = 0.0
+        while not done:
+            o = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+            with torch.no_grad():
+                dist, _ = net(o)
+                action = dist.mean.squeeze(0).numpy()
+            obs, reward, done, info = env.step(action)
+            total_reward += reward
+
+            ax.clear()
+            ax.set_ylim(-0.2, 2.5)
+            ax.set_title(f"Robot Walking — Episode {ep+1}  |  x={info['x_pos']:.2f}m  |  return={total_reward:.1f}")
+            ax.set_xlabel("Position (m)")
+            ax.axhline(0, color="brown", linewidth=3)
+
+            # draw robot
+            bp = env.get_body_parts()
+            ax.plot(*bp["torso"], "b-", linewidth=6)          # torso
+            ax.plot(bp["head"][0], bp["head"][1], "bo",
+                    markersize=14)                              # head
+            c1 = "green" if bp["foot1_contact"] else "orange"
+            c2 = "green" if bp["foot2_contact"] else "orange"
+            ax.plot(*bp["leg1"], color=c1, linewidth=4)       # leg 1
+            ax.plot(*bp["leg2"], color=c2, linewidth=4)       # leg 2
+
+            # ground markers
+            ax.set_xlim(info["x_pos"] - 2, info["x_pos"] + 2)
+            legend = [mpatches.Patch(color="green", label="Foot contact"),
+                      mpatches.Patch(color="orange", label="Foot in air")]
+            ax.legend(handles=legend, loc="upper right")
+            plt.pause(0.02)
+
+    plt.ioff()
+    plt.show()
+
+
 def plot_returns(returns, title="Robot Walking — PPO Training"):
     window = max(1, len(returns) // 20)
     smoothed = np.convolve(returns, np.ones(window) / window, mode="valid")
@@ -218,8 +305,19 @@ def plot_returns(returns, title="Robot Walking — PPO Training"):
 
 
 if __name__ == "__main__":
+    import sys
     env = BipedalWalker2D()
-    agent = PPO(env.obs_dim, env.act_dim)
-    returns = agent.train(env, total_steps=200_000)
-    agent.save()
-    plot_returns(returns)
+
+    # python robot_walking_rl.py watch  → load saved model and watch it walk
+    if len(sys.argv) > 1 and sys.argv[1] == "watch":
+        net = ActorCritic(env.obs_dim, env.act_dim)
+        net.load_state_dict(torch.load("robot_walker.pth"))
+        net.eval()
+        watch_robot(env, net, episodes=5)
+    else:
+        agent = PPO(env.obs_dim, env.act_dim)
+        returns = agent.train(env, total_steps=200_000)
+        agent.save()
+        plot_returns(returns)
+        print("\nTo watch the trained robot walk, run:")
+        print("  python robot_walking_rl.py watch")
