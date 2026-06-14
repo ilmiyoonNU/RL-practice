@@ -225,7 +225,7 @@ def ppo_update(net, optimizer, obs, acts, logps_old, advantages, returns,
             entropy = dist.entropy().mean()
 
             # total loss
-            loss = policy_loss + 0.5*value_loss - 0.05*entropy
+            loss = policy_loss + 0.5*value_loss - 0.01*entropy
 
             optimizer.zero_grad()
             loss.backward()
@@ -245,7 +245,7 @@ def ppo_update(net, optimizer, obs, acts, logps_old, advantages, returns,
 def train(total_steps=300_000, rollout_steps=512):
     env = CartPole()
     net = ActorCritic()
-    opt = optim.Adam(net.parameters(), lr=3e-4)
+    opt = optim.Adam(net.parameters(), lr=1e-4)
 
     all_returns = []
     steps_done  = 0
@@ -365,7 +365,7 @@ if __name__ == "__main__":
         net.eval()
         watch(net, episodes=5)
     else:
-        net, returns = train(total_steps=100_000)
+        net, returns = train(total_steps=300_000)
         plot_returns(returns)
         print("\nTo watch the trained agent:")
         print("  python 02_cartpole_ppo.py watch")
