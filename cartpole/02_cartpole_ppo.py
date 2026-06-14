@@ -225,7 +225,7 @@ def ppo_update(net, optimizer, obs, acts, logps_old, advantages, returns,
             entropy = dist.entropy().mean()
 
             # total loss
-            loss = policy_loss + 0.5*value_loss - 0.01*entropy
+            loss = policy_loss + 0.5*value_loss - 0.05*entropy
 
             optimizer.zero_grad()
             loss.backward()
@@ -242,7 +242,7 @@ def ppo_update(net, optimizer, obs, acts, logps_old, advantages, returns,
 
 # ─── Training Loop ───────────────────────────────────────────────────────────
 
-def train(total_steps=100_000, rollout_steps=512):
+def train(total_steps=300_000, rollout_steps=512):
     env = CartPole()
     net = ActorCritic()
     opt = optim.Adam(net.parameters(), lr=3e-4)
